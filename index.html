@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate Run — 공항 스탑워치</title>
+<style>
+  :root {
+    --ink: #120d33; --coral: #ff5a5f; --amber: #ffb703; --teal: #2ec4b6; --violet: #7c5cff; --sky: #38bdf8;
+    --danger: #d6303a; --pill: rgba(18,13,51,.78);
+    --font: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Pretendard", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink); }
+  body { font-family: var(--font); color: #fff; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  .vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 46%, transparent 45%, rgba(10,6,34,.55) 100%);
+  }
+  .pulse {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .6s;
+    box-shadow: inset 0 0 140px 10px rgba(255,60,80,.75);
+  }
+  body.urgent .pulse { opacity: 1; animation: beat .85s ease-in-out infinite; }
+  @keyframes beat { 0%,100% { opacity: .15; } 15% { opacity: .95; } 30% { opacity: .3; } 45% { opacity: .8; } 70% { opacity: .15; } }
+  .shade {
+    position: fixed; left: 0; right: 0; top: 0; height: 46%; pointer-events: none;
+    background: linear-gradient(rgba(14,10,40,.78), rgba(14,10,40,.35) 55%, transparent);
+  }
+  .shade-b {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 34%; pointer-events: none;
+    background: linear-gradient(transparent, rgba(14,10,40,.78));
+  }
+
+  /* ---- 상단 HUD ---- */
+  .hud {
+    position: fixed; inset: 0 0 auto 0; padding: max(18px, env(safe-area-inset-top)) 20px 0;
+    display: flex; flex-direction: column; align-items: center; pointer-events: none;
+  }
+  .hud > * { pointer-events: auto; }
+  .topbar {
+    width: 100%; max-width: 760px; display: flex; align-items: center; gap: 10px;
+    font-size: .875rem; letter-spacing: .12em; font-weight: 700; color: #fff;
+  }
+  .topbar > span:first-child, .topbar .gate { padding: 6px 11px; border-radius: 999px; background: var(--pill); }
+  .topbar .gate { border: 1px solid rgba(255,255,255,.3); }
+  .chip {
+    margin-left: auto; padding: 6px 12px; border-radius: 999px; font-weight: 800;
+    background: var(--teal); color: var(--ink); letter-spacing: .12em;
+  }
+  body.running .chip { background: var(--amber); }
+  body.urgent .chip { background: var(--danger); color: #fff; animation: blink 1s ease-in-out infinite; }
+  body.paused .chip { background: #fff; color: var(--ink); }
+  @keyframes blink { 50% { opacity: .35; } }
+
+  .timer {
+    margin-top: 1.5vh; font-weight: 700; line-height: 1; letter-spacing: -.02em;
+    font-size: clamp(56px, 14vw, 132px); font-variant-numeric: tabular-nums;
+    text-shadow: 0 2px 0 rgba(18,13,51,.55), 0 8px 44px rgba(18,13,51,.8);
+  }
+  .timer small { font-size: .58em; font-weight: 600; color: #fff; letter-spacing: 0; }
+  .caption {
+    margin-top: 10px; font-size: 1.02rem; font-weight: 600; color: #fff; letter-spacing: .02em;
+    padding: 7px 16px; border-radius: 999px; text-align: center; max-width: 94vw;
+    background: rgba(18,13,51,.7); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.2);
+  }
+
+  /* ---- 하단: 최근 랩 + 버튼 (한 덩어리, 겹치지 않음) ---- */
+  .dockwrap {
+    position: fixed; left: 0; right: 0; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 5;
+    display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 16px; pointer-events: none;
+  }
+  .dockwrap > * { pointer-events: auto; }
+  .recent { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; pointer-events: none; max-width: 560px; }
+  .recent:empty { display: none; }
+  .rl {
+    display: inline-flex; gap: 8px; align-items: baseline; padding: 7px 14px; border-radius: 999px;
+    font-size: .95rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff;
+    background: rgba(18,13,51,.9); border: 1px solid rgba(255,255,255,.3);
+  }
+  .rl i { font-style: normal; color: var(--amber); }
+  .rl.new { animation: pop .3s ease-out; border-color: #fff; }
+  .rl.best { border-color: var(--teal); } .rl.best i { color: var(--teal); }
+  .rl.worst { border-color: #ff7b80; } .rl.worst i { color: #ff9a9e; }
+  .dock { display: flex; justify-content: center; gap: 12px; width: 100%; max-width: 560px; }
+
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; box-shadow: 0 0 0 7px var(--violet); }
+  button {
+    height: 62px; padding: 0 28px; border-radius: 999px; font: inherit; font-weight: 700; font-size: 1.05rem;
+    color: #fff; cursor: pointer; background: rgba(255,255,255,.16);
+    border: 1px solid rgba(255,255,255,.32); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    transition: transform .12s, background .2s, opacity .2s;
+  }
+  button:hover:not(:disabled) { background: rgba(255,255,255,.26); }
+  button:active:not(:disabled) { transform: scale(.95); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  .dock button { flex: 1 1 0; min-width: 0; padding: 0 12px; white-space: nowrap; }
+  .dock #startBtn { flex: 1.6 1 0; }
+  #startBtn { background: var(--teal); color: var(--ink); border-color: var(--teal); }
+  #startBtn:hover:not(:disabled) { background: #5be0d3; }
+  #startBtn.running { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #resetBtn.confirm { background: transparent; border: 2px solid var(--amber); color: var(--amber); }
+  .menu-btn { height: 48px; padding: 0 16px; font-size: .875rem; letter-spacing: .04em; background: var(--pill); }
+
+  .flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 4; }
+  .flash.go { animation: flash .22s ease-out; }
+  @keyframes flash { from { opacity: var(--fa, .35); } to { opacity: 0; } }
+  @keyframes pop { from { transform: translateY(-8px) scale(.94); opacity: 0; } }
+  @keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } }
+
+  /* ---- 기록 · 설정 시트 ---- */
+  .sheet {
+    position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center;
+    background: rgba(10,6,34,.6); backdrop-filter: blur(6px);
+    visibility: hidden; opacity: 0; transition: opacity .2s, visibility .2s;
+  }
+  .sheet.open { visibility: visible; opacity: 1; }
+  .panel {
+    width: min(540px, 100%); max-height: min(82vh, 82dvh); overflow: auto; padding: 20px 20px 24px;
+    background: #1c1552; border: 1px solid rgba(255,255,255,.2); border-radius: 26px 26px 0 0;
+  }
+  .sheet.open .panel { animation: sheetUp .22s ease-out; }
+  @media (min-width: 700px) { .sheet { align-items: center; } .panel { border-radius: 26px; } }
+  .panel h2 { margin: 0; font-size: 1.1rem; letter-spacing: .04em; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .panel button { height: 48px; padding: 0 18px; font-size: .95rem; }
+  .s-time { text-align: center; font-size: 2.4rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-bottom: 10px; }
+  .sheet-ctrl { display: flex; gap: 8px; margin-bottom: 16px; }
+  .sheet-ctrl button { flex: 1; }
+  .sheet-ctrl #sStart { flex: 1.6; background: var(--teal); color: var(--ink); border-color: var(--teal); }
+  .sheet-ctrl #sStart.running { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .settings { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+  .setting { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: .95rem; font-weight: 600; }
+  .setting small, #rmNote { display: block; font-weight: 400; opacity: .9; font-size: .82rem; }
+  .setting button { min-width: 76px; }
+  .setting button[aria-checked="true"] { background: var(--teal); color: var(--ink); border-color: var(--teal); }
+  #rmNote[hidden] { display: none; }
+  .tips { font-size: .875rem; line-height: 1.65; margin-bottom: 16px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.08); }
+  .lap-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+  .lap-head, #laps li { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 8px; align-items: center; padding: 10px 12px; font-variant-numeric: tabular-nums; }
+  .lap-head { font-size: .8rem; letter-spacing: .08em; opacity: .85; font-weight: 700; }
+  .lap-head span:nth-child(n+2), #laps li span, #laps li i { text-align: right; }
+  #laps { list-style: none; margin: 0; padding: 0; }
+  #laps li { border-top: 1px solid rgba(255,255,255,.14); font-size: .95rem; font-weight: 600; }
+  #laps li i { font-style: normal; color: var(--amber); }
+  #laps li.stop { opacity: .75; }
+  .tag { font-size: .75rem; padding: 2px 8px; border-radius: 99px; margin-left: 6px; letter-spacing: .05em; font-weight: 800; }
+  .tag.best { background: var(--teal); color: var(--ink); }
+  .tag.worst { background: #ff7b80; color: var(--ink); }
+  .empty { padding: 18px 12px; opacity: .8; font-size: .9rem; }
+
+  .topbar > *, .menu-btn { white-space: nowrap; }
+  @media (max-width: 480px) {
+    .topbar { gap: 6px; font-size: .8rem; letter-spacing: .05em; }
+    .topbar > span:first-child { display: none; }
+    .menu-btn { padding: 0 12px; font-size: .8rem; }
+    .dock button { font-size: 1rem; }
+  }
+  @media (max-height: 560px) { .caption { display: none; } button { height: 52px; } .dockwrap { gap: 8px; } .timer { font-size: clamp(48px, 11vh, 96px); } }
+  canvas { transition: filter .5s; }
+  body.paused canvas { filter: saturate(.7) brightness(.92); }
+  @media (prefers-reduced-motion: reduce) {
+    body.urgent .pulse, body.urgent .chip, .rl.new, .sheet.open .panel, .flash.go { animation: none; }
+    body.urgent .pulse { opacity: .5; }
+    .sheet { transition: none; }
+  }
+  body.calm .pulse { animation: none !important; opacity: .45; }
+  body.calm .chip { animation: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<div class="vignette"></div>
+<div class="pulse"></div>
+<div class="shade"></div>
+<div class="shade-b"></div>
+
+<div class="hud">
+  <div class="topbar">
+    <span>ICN → CJU</span>
+    <span class="gate">GATE 17</span>
+    <span class="chip" id="chip">BOARDING</span>
+    <button class="menu-btn" id="menuBtn" aria-haspopup="dialog">기록 · 설정</button>
+  </div>
+  <div class="timer" id="display" role="timer" aria-live="off">00:00<small>.00</small></div>
+  <div class="caption" id="caption"></div>
+</div>
+<div class="flash" id="flash"></div>
+<div class="dockwrap" id="dockwrap">
+  <div class="recent" id="recent" aria-hidden="true"></div>
+  <div class="dock">
+    <button id="startBtn">출발</button>
+    <button id="lapBtn" disabled>랩</button>
+    <button id="resetBtn" disabled>초기화</button>
+  </div>
+</div>
+<div class="sr" id="sr" role="status" aria-live="polite"></div>
+
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="panel">
+    <div class="panel-head"><h2 id="sheetTitle">기록 · 설정</h2><button id="closeBtn">닫기</button></div>
+    <div class="s-time" id="sTime" aria-hidden="true">00:00.00</div>
+    <div class="sheet-ctrl">
+      <button id="sStart">출발</button>
+      <button id="sLap" disabled>랩</button>
+    </div>
+    <div class="settings">
+      <div class="setting"><span id="l1">강한 연출<small>화면 흔들림, 붉은 맥박, 속도선, 랩 플래시·진동</small></span><button id="motionBtn" role="switch" aria-labelledby="l1" aria-checked="false">꺼짐</button></div>
+      <div class="setting"><span id="l2">화면 탭으로 출발/멈춤<small>실수로 멈추지 않게 기본은 꺼짐</small></span><button id="tapBtn" role="switch" aria-labelledby="l2" aria-checked="false">꺼짐</button></div>
+      <small id="rmNote" hidden>기기의 '동작 줄이기' 설정이 켜져 있어 강한 연출은 쓸 수 없어요.</small>
+    </div>
+    <div class="tips">
+      <b>단축키</b> SPACE 출발/멈춤 · L 랩 · R 초기화(멈춘 상태에서, 한 번 더 누르면 삭제)<br>
+      <b>랩</b>은 달린 시간만 재요. 멈춘 시간은 빼고, 멈출 때 마지막 구간은 STOP으로 남아요. BEST/SLOW는 랩이 3개 이상일 때 표시돼요.
+    </div>
+    <div class="lap-actions"><button id="copyBtn">기록 복사</button></div>
+    <div class="lap-head"><span>랩</span><span>구간</span><span>누적</span></div>
+    <ol id="laps" aria-label="랩 기록"></ol>
+    <div class="empty" id="emptyLaps">아직 랩 기록이 없어요. 달리는 중에 '랩'을 눌러 보세요.</div>
+  </div>
+</div>
+
+<script>
+/* ================= 스탑워치 상태 ================= */
+const $ = id => document.getElementById(id);
+const display = $('display'), startBtn = $('startBtn'), lapBtn = $('lapBtn'), resetBtn = $('resetBtn'),
+      lapsEl = $('laps'), caption = $('caption'), chip = $('chip'), recent = $('recent'), srEl = $('sr'),
+      sheet = $('sheet'), flashEl = $('flash'), emptyLaps = $('emptyLaps'), menuBtn = $('menuBtn'),
+      sStart = $('sStart'), sLap = $('sLap');
+let running = false, startTime = 0, elapsed = 0, lastLap = 0, lapCount = 0, lastLapAt = 0, noteUntil = 0, noteText = '';
+const laps = [];
+
+const pad = n => String(n).padStart(2, '0');
+const fmt = ms => {
+  const h = Math.floor(ms / 3600000), m = Math.floor(ms % 3600000 / 60000);
+  const s = Math.floor(ms % 60000 / 1000), c = Math.floor(ms % 1000 / 10);
+  return `${h ? h + ':' + pad(m) : pad(m)}:${pad(s)}.${pad(c)}`;
+};
+const spoken = ms => `${Math.floor(ms / 60000)}분 ${(ms % 60000 / 1000).toFixed(1)}초`;
+let aq = [], at = null;                           // 연속 안내는 한 번에 모아서 낭독
+const announce = t => {
+  if (!t) return; aq.push(t); clearTimeout(at);
+  at = setTimeout(() => { srEl.textContent = aq.join('. '); aq = []; }, 150);
+};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+function save() {
+  store.set('gaterun', JSON.stringify({ running, wall: Date.now() - elapsed, elapsed, lastLap, lapCount, laps }));
+}
+
+/* 하단 영역 높이 (손/캐리어가 버튼과 겹치지 않도록 캔버스에서 사용) */
+let dockH = 80;
+if (window.ResizeObserver) new ResizeObserver(() => { dockH = $('dockwrap').offsetHeight + 18; }).observe($('dockwrap'));
+
+/* 설정: 강한 연출(기본 꺼짐), 화면 탭 토글(기본 꺼짐). OS의 '동작 줄이기'가 켜져 있으면 항상 부드럽게 */
+const motionBtn = $('motionBtn'), tapBtn = $('tapBtn'), rmq = matchMedia('(prefers-reduced-motion: reduce)');
+let userCalm = store.get('calm') !== '0', calm = true, tapOn = store.get('tap') === '1';
+function applySettings() {
+  calm = userCalm || rmq.matches;
+  document.body.classList.toggle('calm', calm);
+  motionBtn.setAttribute('aria-checked', !calm); motionBtn.textContent = calm ? '꺼짐' : '켜짐';
+  motionBtn.disabled = rmq.matches; $('rmNote').hidden = !rmq.matches;
+  tapBtn.setAttribute('aria-checked', tapOn); tapBtn.textContent = tapOn ? '켜짐' : '꺼짐';
+}
+motionBtn.onclick = () => { userCalm = !userCalm; store.set('calm', userCalm ? '1' : '0'); applySettings(); };
+tapBtn.onclick = () => { tapOn = !tapOn; store.set('tap', tapOn ? '1' : '0'); applySettings(); };
+rmq.addEventListener && rmq.addEventListener('change', applySettings);
+applySettings();
+
+/* 화면 꺼짐 방지 */
+let wake = null;
+async function wakeOn() { try { if ('wakeLock' in navigator && !wake) wake = await navigator.wakeLock.request('screen'); } catch (e) {} }
+function wakeOff() { try { wake && wake.release(); } catch (e) {} wake = null; }
+document.addEventListener('visibilitychange', () => { if (running && document.visibilityState === 'visible') { wake = null; wakeOn(); } });
+
+const hasKeys = matchMedia('(hover: hover)').matches;
+function captionText() {
+  if (noteUntil > performance.now()) return noteText;
+  const s = elapsed / 1000;
+  if (!running) return elapsed === 0 ? '탑승 마감까지 얼마 안 남았어요.' + (hasKeys ? ' SPACE로 출발!' : ' 준비되면 출발!') : '멈춤 — 다시 달리려면 버튼을 누르세요';
+  if (s < 5) return '달려요! 사람들 사이로!';
+  if (s < 12) return '여권, 탑승권 꼭 쥐고!';
+  if (s < 20) return '게이트가 곧 닫혀요…';
+  if (s < 30) return '제발 기다려 주세요!!';
+  if (s < 45) return '절대 포기 못 해!';
+  if (s < 60) return '거의 다 왔어요… 아마도!';
+  return '이쯤이면 다음 비행기가 빠를지도요';
+}
+const cache = {};
+function setText(key, el, val, html) {
+  if (cache[key] === val) return;
+  cache[key] = val; html ? el.innerHTML = val : el.textContent = val;
+}
+function renderUI() {
+  const [m, cs] = fmt(elapsed).split('.');
+  setText('t', display, `${m}<small>.${cs}</small>`, true);
+  setText('c', caption, captionText());
+  const urgent = running && elapsed > 15000;
+  const b = document.body.classList;
+  b.toggle('urgent', urgent); b.toggle('running', running); b.toggle('paused', !running && elapsed > 0);
+  const state = !running ? (elapsed ? 'PAUSED' : 'BOARDING') : urgent ? 'GATE CLOSING' : 'FINAL CALL';
+  if (cache.chip !== state) { setText('chip', chip, state); if (state === 'GATE CLOSING') announce('게이트가 곧 닫힙니다'); }
+  resetBtn.disabled = running || elapsed === 0;
+  const label = startBtn.textContent;
+  setText('sStart', sStart, label); sStart.classList.toggle('running', running); sLap.disabled = !running;
+  setText('st', $('sTime'), fmt(elapsed));
+}
+
+/* 랩 (랩은 '달린 시간'만 잽니다. 멈춰 있던 시간은 포함되지 않아요) */
+function drawLaps() {
+  const real = laps.filter(l => !l.stop), ds = real.map(l => l.d);
+  const best = ds.length ? Math.min(...ds) : 0, worst = ds.length ? Math.max(...ds) : 0;
+  const many = real.length > 2 && best !== worst;
+  const tagOf = l => !many || l.stop ? '' : l.d === best ? 'best' : l.d === worst ? 'worst' : '';
+  lapsEl.innerHTML = laps.map(l => {
+    const t = tagOf(l);
+    const badge = t ? `<em class="tag ${t}">${t === 'best' ? 'BEST' : 'SLOW'}</em>` : '';
+    return `<li class="${l.stop ? 'stop' : ''}"><b>${l.label}${badge}</b><i>+${fmt(l.d)}</i><span>${fmt(l.total)}</span></li>`;
+  }).join('');
+  emptyLaps.style.display = laps.length ? 'none' : 'block';
+  menuBtn.textContent = real.length ? `기록 · 설정 (${real.length})` : '기록 · 설정';
+  recent.innerHTML = laps.slice(0, 3).reverse().map((l, i, a) =>
+    `<span class="rl ${tagOf(l)} ${i === a.length - 1 ? 'new' : ''}"><b>${l.label}</b><i>+${fmt(l.d)}</i></span>`).join('');
+}
+function addLap(label, stop) {
+  if (!stop) lapCount++;
+  laps.unshift({ d: elapsed - lastLap, total: elapsed, label: label || `LAP ${lapCount}`, stop: !!stop });
+  lastLap = elapsed; drawLaps(); save();
+  announce(stop ? `멈춤 ${spoken(elapsed)}` : `랩 ${lapCount}, 구간 ${spoken(laps[0].d)}`);
+}
+function toggle() {
+  clearConfirm();
+  if (!running) {
+    startTime = performance.now() - elapsed; running = true;
+    startBtn.textContent = '멈춤'; startBtn.classList.add('running');
+    lapBtn.disabled = false; wakeOn(); announce('출발');
+  } else {
+    elapsed = performance.now() - startTime; running = false;
+    if (elapsed - lastLap > 10) addLap('STOP', true);
+    startBtn.textContent = '다시 달리기'; startBtn.classList.remove('running');
+    lapBtn.disabled = true; wakeOff(); announce(`멈춤 ${spoken(elapsed)}`);
+  }
+  save(); renderUI();
+}
+function lap() {
+  if (!running) return;
+  const now = performance.now();
+  if (now - lastLapAt < 300) return;          // 연타 방지
+  lastLapAt = now;
+  addLap();
+  flashEl.style.setProperty('--fa', calm ? .12 : .35);
+  flashEl.classList.remove('go'); void flashEl.offsetWidth; flashEl.classList.add('go');
+  if (!calm) { try { navigator.vibrate && navigator.vibrate(30); } catch (e) {} }
+}
+let confirmTimer = null;
+function clearConfirm() {
+  clearTimeout(confirmTimer); confirmTimer = null;
+  resetBtn.classList.remove('confirm'); resetBtn.textContent = '초기화';
+}
+function reset() {
+  if (running || elapsed === 0) return;
+  if (!confirmTimer) {
+    resetBtn.classList.add('confirm'); resetBtn.textContent = '삭제 확인';
+    announce('한 번 더 누르면 기록이 삭제됩니다');
+    confirmTimer = setTimeout(clearConfirm, 5000); return;
+  }
+  clearConfirm();
+  elapsed = 0; lastLap = 0; lapCount = 0; laps.length = 0; drawLaps();
+  startBtn.textContent = '출발'; startBtn.classList.remove('running');
+  lapBtn.disabled = true; announce('초기화');
+  store.set('gaterun', ''); renderUI();
+}
+const blurAfter = fn => e => { fn(); if (e.detail > 0) e.currentTarget.blur(); };
+startBtn.onclick = blurAfter(toggle); lapBtn.onclick = blurAfter(lap); resetBtn.onclick = blurAfter(reset);
+sStart.onclick = blurAfter(toggle); sLap.onclick = blurAfter(lap);
+
+/* 기록 · 설정 시트 (열려 있는 동안 뒤쪽은 inert) */
+const bgEls = () => [document.querySelector('.hud'), $('dockwrap'), $('c')];
+let opener = null;
+function openSheet() {
+  opener = document.activeElement;
+  bgEls().forEach(el => el.inert = true);
+  sheet.classList.add('open'); $('closeBtn').focus();
+}
+function closeSheet(viaKeyboard) {
+  bgEls().forEach(el => el.inert = false);
+  sheet.classList.remove('open');
+  // 포커스는 항상 주 조작 버튼(출발/멈춤)으로: 논리적 위치이고, SPACE를 누르면 바로 출발/멈춤이 된다
+  startBtn.focus({ preventScroll: true });
+}
+menuBtn.onclick = openSheet;
+$('closeBtn').onclick = e => closeSheet(e.detail === 0);
+sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(false); });
+sheet.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeSheet(true); return; }
+  if (e.key !== 'Tab') return;
+  const f = [...sheet.querySelectorAll('button:not(:disabled)')];
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+$('copyBtn').onclick = async () => {
+  const text = laps.slice().reverse().map(l => `${l.label}\t+${fmt(l.d)}\t${fmt(l.total)}`).join('\n') || '기록 없음';
+  let ok = true;
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    try {                                         // file:// 등 clipboard API가 막힌 환경용 대체 복사
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      sheet.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+    } catch (e2) { ok = false; }
+  }
+  $('copyBtn').textContent = ok ? '복사됨 ✓' : '복사 실패'; announce(ok ? '기록을 복사했어요' : '복사하지 못했어요');
+  setTimeout(() => $('copyBtn').textContent = '기록 복사', 1500);
+};
+
+/* 키보드: 물리 키(e.code) 기준이라 한글 입력 상태에서도 동작. 시트가 열려 있어도 SPACE/L은 동작 */
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const open = sheet.classList.contains('open');
+  const onBtn = e.target.closest && e.target.closest('button');
+  if (e.code === 'Space') { if (onBtn) return; e.preventDefault(); if (!e.repeat) toggle(); }
+  else if (e.repeat) return;
+  else if (e.code === 'KeyL') lap();
+  else if (e.code === 'KeyR' && !open) reset();
+});
+
+/* 새로고침 후 복구 (달리는 중이었다면 실제 스탑워치처럼 계속 흐른 것으로 이어서 계산) */
+(function restore() {
+  const raw = store.get('gaterun'); if (!raw) return;
+  try {
+    const s = JSON.parse(raw);
+    if (!Array.isArray(s.laps) || typeof s.elapsed !== 'number') return;
+    const el = s.running ? Date.now() - s.wall : s.elapsed;
+    laps.push(...s.laps); lapCount = s.lapCount | 0; lastLap = +s.lastLap || 0; elapsed = el;
+    if (s.running) {
+      startTime = performance.now() - elapsed; running = true;
+      startBtn.textContent = '멈춤'; startBtn.classList.add('running'); lapBtn.disabled = false; wakeOn();
+      noteText = '새로고침 후에도 계속 재고 있었어요';
+    } else if (elapsed > 0) { startBtn.textContent = '다시 달리기'; noteText = '이전 기록을 복구했어요'; }
+    if (elapsed > 0) noteUntil = performance.now() + 4000;
+    drawLaps();
+  } catch (e) {}
+})();
+
+/* ================= 1인칭 공항 복도 ================= */
+const cv = $('c'), ctx = cv.getContext('2d');
+let W, H, DPR, cx, cy, f;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cx = W / 2; cy = H * 0.6; f = Math.max(H * 0.75, W * 0.5);
+}
+addEventListener('resize', resize); resize();
+cv.addEventListener('click', () => { if (tapOn) toggle(); });
+
+const HW = 3.2, FL = 1.6, CH = 1.9, L = 4, NEAR = 0.35, ZFAR = 76;
+const PAL = ['#ff5a5f', '#ffb703', '#2ec4b6', '#7c5cff', '#38bdf8'];
+const SKIN = ['#f3bf9f', '#e0a781', '#c68863', '#8d5a3b', '#f6d2b8'];
+const HAIR = ['#1d1410', '#3a2418', '#6b4423', '#d9b36c', '#2b2b3a'];
+const fogA = z => Math.max(0, Math.min(1, (ZFAR - z) / 46));
+
+let camX = 0, camY = 0, D = 0, speed = 0, phase = 0, T = 0;
+
+const P = (x, y, z) => { const s = f / z; return [cx + (x - camX) * s, cy + (y - camY) * s]; };
+function poly(pts, fill, a = 1) {
+  ctx.globalAlpha = a; ctx.fillStyle = fill; ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.fill();
+}
+const wallQ = (x, y1, y2, z1, z2) => [P(x, y1, z1), P(x, y1, z2), P(x, y2, z2), P(x, y2, z1)];
+const flatQ = (x1, x2, y, z1, z2) => [P(x1, y, z1), P(x2, y, z1), P(x2, y, z2), P(x1, y, z2)];
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  r = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+const fillRR = (x, y, w, h, r, c) => { rr(x, y, w, h, r); ctx.fillStyle = c; ctx.fill(); };
+
+/* 행인 */
+const LANES = [-2.6, -2.1, -1.6, 1.4, 1.8, 2.3, 2.7, -1.05, 1.1];
+const people = [];
+function spawn(p) {
+  p.x = LANES[Math.floor(Math.random() * LANES.length)];
+  p.z = D + 14 + Math.random() * (ZFAR - 10);
+  p.v = Math.random() < .35 ? -(0.8 + Math.random()) : 0.9 + Math.random() * 0.9;
+  p.c = PAL[Math.floor(Math.random() * PAL.length)];
+  p.pants = ['#1f2937', '#334155', '#3b2f63', '#14532d'][Math.floor(Math.random() * 4)];
+  p.skin = SKIN[Math.floor(Math.random() * SKIN.length)];
+  p.hair = HAIR[Math.floor(Math.random() * HAIR.length)];
+  p.bag = Math.random() < .45 ? PAL[Math.floor(Math.random() * PAL.length)] : null;
+  p.ph = Math.random() * 6;
+  return p;
+}
+for (let i = 0; i < 16; i++) people.push(spawn({}));
+
+function drawPerson(p) {
+  const zr = p.z - D; if (zr < NEAR) return;
+  const a = fogA(zr); if (a < .02) return;
+  const s = f / zr, sx = cx + (p.x - camX) * s, fy = cy + (FL - camY) * s;
+  const sw = Math.sin(T * 5 + p.ph) * 0.07 * s;
+  ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(sx, fy, .38 * s, .08 * s, 0, 0, 7); ctx.fill();
+  fillRR(sx - .19 * s + sw, fy - .88 * s, .16 * s, .88 * s, .06 * s, p.pants);
+  fillRR(sx + .03 * s - sw, fy - .88 * s, .16 * s, .88 * s, .06 * s, p.pants);
+  fillRR(sx - .34 * s, fy - 1.45 * s, .1 * s, .62 * s, .05 * s, p.c);
+  fillRR(sx + .24 * s, fy - 1.45 * s, .1 * s, .62 * s, .05 * s, p.c);
+  fillRR(sx - .27 * s, fy - 1.5 * s, .54 * s, .72 * s, .16 * s, p.c);
+  ctx.fillStyle = p.skin; ctx.beginPath(); ctx.arc(sx, fy - 1.63 * s, .125 * s, 0, 7); ctx.fill();
+  ctx.fillStyle = p.hair; ctx.beginPath(); ctx.arc(sx, fy - 1.64 * s, .13 * s, Math.PI, 0); ctx.fill();
+  if (p.bag) {
+    ctx.fillStyle = '#333'; ctx.fillRect(sx + .4 * s, fy - .72 * s, .03 * s, .3 * s);
+    fillRR(sx + .28 * s, fy - .46 * s, .34 * s, .46 * s, .06 * s, p.bag);
+  }
+}
+
+/* 천장 매달린 사인 */
+const SIGNS = [
+  { t: 'GATE 17  ↑', bg: '#ffb703', fg: '#1b1340' }, { t: 'DUTY FREE', bg: '#7c5cff', fg: '#fff' },
+  { t: 'GATE 17  ↑', bg: '#ffb703', fg: '#1b1340' }, { t: 'WC', bg: '#2ec4b6', fg: '#12123a' },
+];
+function drawSign(k) {
+  const zr = k * L + L / 2 - D; if (zr < NEAR) return;
+  const a = fogA(zr); if (a < .02) return;
+  const sg = SIGNS[Math.floor(k / 3) % SIGNS.length], s = f / zr, X = cx - camX * s;
+  const y1 = cy + (-1.55 - camY) * s, h = .5 * s, w = Math.min(2.6 * s, W * .6), top = cy + (-CH - camY) * s;
+  ctx.globalAlpha = a * ((y1 + h) < H * .46 ? .18 : 1);   // 타이머 뒤로 지나갈 땐 흐리게
+  ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = Math.max(1, .02 * s);
+  ctx.beginPath(); ctx.moveTo(X - w * .35, top); ctx.lineTo(X - w * .35, y1); ctx.moveTo(X + w * .35, top); ctx.lineTo(X + w * .35, y1); ctx.stroke();
+  ctx.save(); ctx.shadowColor = sg.bg; ctx.shadowBlur = .25 * s;
+  fillRR(X - w / 2, y1, w, h, .1 * s, sg.bg); ctx.restore();
+  ctx.fillStyle = sg.fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `800 ${.27 * s}px "Segoe UI", sans-serif`; ctx.fillText(sg.t, X, y1 + h / 2 + .01 * s);
+}
+
+/* 복도 한 구간 */
+function drawSeg(k, sky) {
+  const A = k * L, B = A + L, al = fogA(A + L / 2 - D); if (al < .01) return;
+  const Z = (a, b) => { a = Math.max(a - D, NEAR); b -= D; return b > a ? [a, b] : null; };
+  const r = Z(A, B); if (!r) return;
+  poly(wallQ(-HW, -CH, -1.1, ...r), '#2b2575', al);
+  poly(wallQ(-HW, -1.1, 0.7, ...r), sky, al);
+  poly(wallQ(-HW, 0.7, FL, ...r), '#2a2180', al);
+  poly(wallQ(HW, -CH, FL, ...r), '#3a2a8c', al);
+  const col = PAL[((k % 5) + 5) % 5], bx = Z(A + .7, B - .7);
+  if (bx) {
+    poly(wallQ(HW, -0.9, 0.5, ...bx), col, al);
+    poly(wallQ(HW, -0.78, 0.38, ...bx), '#fff', al * .2);
+    poly(flatQ(2.2, HW, FL, ...bx), col, al * .22);
+  }
+  const m = Z(B - .14, B);
+  if (m) { poly(wallQ(-HW, -CH, FL, ...m), '#120d33', al); poly(wallQ(HW, -CH, FL, ...m), '#120d33', al); }
+  poly(flatQ(-2.7, -2.55, -CH, ...r), '#2ec4b6', al);
+  poly(flatQ(2.55, 2.7, -CH, ...r), '#ff5a5f', al);
+  const lt = Z(A + .9, B - .9);
+  if (lt) {
+    poly(flatQ(-1.1, 1.1, -CH, ...lt), '#fff', al * .14);
+    poly(flatQ(-.5, .5, -CH, ...lt), '#fff4d6', al);
+    poly(flatQ(-.5, .5, FL, ...lt), '#fff', al * .12);
+  }
+  const ds = Z(A + .4, B - .4);
+  if (ds) poly(flatQ(-2.35, -2.15, FL, ...ds), '#2ec4b6', al * .9);
+  const z0 = r[0], pa = P(-HW, FL, z0), pb = P(HW, FL, z0);
+  ctx.globalAlpha = al * .1; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+}
+
+function drawWorld() {
+  const k0 = Math.floor(D / L), k1 = Math.floor((D + ZFAR) / L);
+  // 먼 곳의 빛
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, H * .55);
+  g.addColorStop(0, '#fff3dc'); g.addColorStop(.25, '#ffb38a'); g.addColorStop(.6, '#ff5e8a'); g.addColorStop(1, '#3a2a7a');
+  ctx.globalAlpha = 1; ctx.fillStyle = g; ctx.fillRect(-W, -H, W * 3, H * 3);
+  // 바닥, 천장
+  const fg = ctx.createLinearGradient(0, cy, 0, H);
+  fg.addColorStop(0, '#ff9a76'); fg.addColorStop(.1, '#a04aa8'); fg.addColorStop(.4, '#4a2a9a'); fg.addColorStop(1, '#2a1d6e');
+  poly(flatQ(-HW, HW, FL, NEAR, ZFAR), fg);
+  const cg = ctx.createLinearGradient(0, cy, 0, 0);
+  cg.addColorStop(0, '#ffb199'); cg.addColorStop(.2, '#5a3fa8'); cg.addColorStop(.7, '#2a2070'); cg.addColorStop(1, '#1a1448');
+  poly(flatQ(-HW, HW, -CH, NEAR, ZFAR), cg);
+  // 창밖 노을
+  const sky = ctx.createLinearGradient(0, cy - H * .3, 0, cy + H * .12);
+  sky.addColorStop(0, '#5b4bd6'); sky.addColorStop(.5, '#ff5e8a'); sky.addColorStop(1, '#ffb36b');
+  // 바닥 세로선
+  ctx.globalAlpha = .07; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+  [-1.6, 0, 1.6].forEach(x => { const a = P(x, FL, NEAR), b = P(x, FL, ZFAR); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); });
+
+  const buckets = {};
+  people.forEach(p => { (buckets[Math.floor(p.z / L)] ||= []).push(p); });
+  for (let k = k1; k >= k0; k--) {
+    drawSeg(k, sky);
+    if (((k % 3) + 3) % 3 === 1) drawSign(k);
+    if (buckets[k]) buckets[k].sort((a, b) => b.z - a.z).forEach(drawPerson);
+  }
+  // 먼 곳의 헤이즈
+  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = .55;
+  const h = ctx.createRadialGradient(cx, cy, 0, cx, cy, H * .38);
+  h.addColorStop(0, 'rgba(255,214,170,.8)'); h.addColorStop(1, 'rgba(255,214,170,0)');
+  ctx.fillStyle = h; ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+
+/* 속도선 */
+const streaks = Array.from({ length: 36 }, () => ({ a: Math.random() * 6.283, r: Math.random(), s: .5 + Math.random() }));
+function drawStreaks(dt) {
+  const vis = Math.min(1, Math.max(0, (speed - 3) / 7)) * (calm ? .6 : 1); if (vis <= 0) return;
+  const R = Math.hypot(W, H) / 2;
+  ctx.lineCap = 'round'; ctx.strokeStyle = '#fff';
+  streaks.forEach(st => {
+    st.r += dt * (.5 + speed * .1) * st.s;
+    if (st.r > 1) { st.r = 0; st.a = Math.random() * 6.283; }
+    const r0 = R * (.3 + .7 * st.r * st.r), r1 = r0 + R * .16 * (.4 + st.r) * vis;
+    ctx.globalAlpha = st.r * vis * .3; ctx.lineWidth = 1 + st.r * 2.5;
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(st.a) * r0, cy + Math.sin(st.a) * r0 * .8);
+    ctx.lineTo(cx + Math.cos(st.a) * r1, cy + Math.sin(st.a) * r1 * .8); ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+}
+
+/* 1인칭 손: 왼손 캐리어, 오른손 여권 */
+const SK = '#f3bf9f', SKD = '#dd9b7a', SLV = '#2d2a78', CUF = '#eceaff';
+function drawHands() {
+  const u = Math.max(.55, Math.min(H / 800, W / 620)), k = Math.min(speed / 9, 1.3) * (calm ? .55 : 1), sp = Math.min(W * (W < 500 ? .3 : .36), 410 * u);
+  const ph = phase;
+  // --- 왼손 + 캐리어
+  ctx.save();
+  ctx.translate(cx - sp + Math.sin(ph * .5 + 2) * 10 * k * u, H - 270 * u - dockH * .3 - Math.abs(Math.sin(ph + 1)) * 16 * k * u);
+  ctx.rotate(.1 + Math.sin(ph * .5) * .035 * k); ctx.scale(u, u);
+  fillRR(-135, 150, 270, 340, 32, '#ff5a5f');
+  ctx.fillStyle = 'rgba(0,0,0,.13)'; for (let i = -2; i <= 2; i++) { rr(i * 46 - 5, 175, 10, 290, 5); ctx.fill(); }
+  fillRR(-135, 150, 270, 62, 32, 'rgba(255,255,255,.16)');
+  fillRR(-60, 138, 120, 22, 9, '#2a2a55');
+  ctx.save(); ctx.translate(118, 190); ctx.rotate(Math.sin(ph * 1.2) * .25 * k + .1);
+  fillRR(-4, 0, 8, 40, 3, '#555'); fillRR(-22, 36, 44, 56, 8, '#ffb703'); fillRR(-14, 46, 28, 6, 3, 'rgba(0,0,0,.25)'); ctx.restore();
+  fillRR(-28, 14, 11, 130, 5, '#d7d9ee'); fillRR(17, 14, 11, 130, 5, '#d7d9ee');
+  ctx.fillStyle = SLV; ctx.beginPath(); ctx.moveTo(-50, 0); ctx.lineTo(40, -14); ctx.lineTo(-10, 230); ctx.lineTo(-150, 210); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = CUF; ctx.beginPath(); ctx.moveTo(-52, 4); ctx.lineTo(42, -14); ctx.lineTo(36, 14); ctx.lineTo(-48, 34); ctx.closePath(); ctx.fill();
+  fillRR(-46, -12, 92, 22, 11, '#1a1a1a');
+  fillRR(-48, -42, 96, 54, 24, SK);
+  ctx.strokeStyle = SKD; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  [-16, 4, 24].forEach(x => { ctx.beginPath(); ctx.moveTo(x, -38); ctx.lineTo(x, -6); ctx.stroke(); });
+  ctx.fillStyle = SK; ctx.beginPath(); ctx.ellipse(-52, -2, 16, 24, .3, 0, 7); ctx.fill();
+  ctx.restore();
+
+  // --- 오른손 + 여권 + 탑승권
+  ctx.save();
+  ctx.translate(cx + sp + Math.sin(ph * .5 + 1) * 14 * k * u, H - 225 * u - dockH * .3 - Math.abs(Math.sin(ph)) * 22 * k * u);
+  ctx.rotate(-.08 + Math.sin(ph * .5) * .07 * k); ctx.scale(u, u);
+  ctx.fillStyle = SLV; ctx.beginPath(); ctx.moveTo(-52, 50); ctx.lineTo(58, 42); ctx.lineTo(170, 300); ctx.lineTo(10, 310); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = CUF; ctx.beginPath(); ctx.moveTo(-54, 46); ctx.lineTo(60, 38); ctx.lineTo(66, 68); ctx.lineTo(-48, 78); ctx.closePath(); ctx.fill();
+  ctx.save(); ctx.rotate(.14); fillRR(10, -170, 40, 100, 6, '#fff'); fillRR(10, -170, 40, 22, 6, '#ff5a5f'); fillRR(18, -138, 24, 4, 2, '#cbd0e6'); fillRR(18, -128, 18, 4, 2, '#cbd0e6'); ctx.restore();
+  ctx.save(); ctx.rotate(-.17);
+  fillRR(-44, -150, 88, 140, 9, '#0f7b6c'); fillRR(-44, -150, 88, 140, 9, 'rgba(255,255,255,.06)');
+  rr(-36, -142, 72, 124, 6); ctx.strokeStyle = 'rgba(246,210,122,.55)'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -98, 22, 0, 7); ctx.strokeStyle = '#f6d27a'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -98, 9, 0, 7); ctx.stroke();
+  fillRR(-26, -62, 52, 5, 2, '#f6d27a'); fillRR(-18, -50, 36, 4, 2, '#f6d27a');
+  ctx.restore();
+  fillRR(-48, -38, 96, 82, 30, SK);
+  ctx.strokeStyle = SKD; ctx.lineWidth = 3;
+  for (let i = 0; i < 4; i++) { fillRR(-46 + i * 23, -52, 21, 40, 10, SK); rr(-46 + i * 23, -52, 21, 40, 10); ctx.stroke(); }
+  ctx.fillStyle = SK; ctx.beginPath(); ctx.ellipse(52, 4, 15, 28, -.25, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+/* ================= 메인 루프 ================= */
+let last = performance.now(), idleAcc = 0;
+function frame(now) {
+  let dt = Math.min(.05, (now - last) / 1000); last = now; T += dt;
+  if (running) elapsed = now - startTime;
+  renderUI();
+
+  const target = running ? (elapsed > 30000 ? 14 : elapsed > 15000 ? 12.5 : 9.5) : 0;
+  speed += (target - speed) * Math.min(1, dt * (running ? 1.8 : 3));
+  if (speed < .02 && !running) speed = 0;
+  if (!running && speed === 0) {            // 멈춰 있을 땐 약 15fps로만 그려 배터리 절약
+    idleAcc += dt;
+    if (idleAcc < .066) { requestAnimationFrame(frame); return; }
+    dt = idleAcc; idleAcc = 0;
+  }
+  D += speed * dt;
+  phase += dt * (speed > .05 ? 5.5 + speed * .5 : 0);
+  people.forEach(p => { p.z += p.v * dt; const zr = p.z - D; if (zr < NEAR || zr > ZFAR + 12) spawn(p); });
+
+  const k = Math.min(speed / 9, 1.3), amp = calm ? .65 : 1;
+  camY = -Math.abs(Math.sin(phase)) * .09 * k * amp + Math.sin(T * 1.7) * .012 * (1 - Math.min(1, k));
+  camX = Math.sin(phase * .5) * .12 * k * amp;
+  const roll = Math.sin(phase * .5 + .6) * .022 * k * amp;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(roll); ctx.scale(1.06, 1.06); ctx.translate(-cx, -cy);
+  drawWorld();
+  ctx.restore();
+  drawStreaks(dt);
+  drawHands();
+  requestAnimationFrame(frame);
+}
+renderUI();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
